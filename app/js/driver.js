@@ -41,6 +41,138 @@
   }
   PS.statusPill = statusPill;
 
+  /* ---------- HOME: "You are here" map (Lyft-style) ---------- */
+  // Shows the driver's location (browser geolocation, or a demo spot near AT&T Stadium)
+  // with every bookable spot as a price pin. Pan/zoom freely; tap a pin for a quick card.
+  var DEMO_LOC = { lat: 32.7559, lng: -97.1032, demo: true };
+  var NEAR_M = 100000; // within ~62 mi we frame you together with the nearest venue's spots
+
+  function homeMap(root, type) {
+    var el = U.$('#home-map', root), locEl = U.$('#hm-loc', root), countEl = U.$('#hm-count', root),
+      sheet = U.$('#hm-sheet', root), locBtn = U.$('#hm-locate', root);
+    var dead = false;
+    function spots() { return S.state.listings.filter(function (l) { return l.active && l.price[type]; }); }
+    function nearestVenue(lat, lng) {
+      var best = null;
+      D.venues.forEach(function (v) { var m = S.haversine(lat, lng, v.lat, v.lng); if (!best || m < best.m) best = { v: v, m: m }; });
+      return best;
+    }
+    function shortName(v) { return v.name.replace('GEHA Field at ', '').replace('Downtown Austin — ', ''); }
+
+    // Offline / Leaflet blocked: schematic map around the demo venue, no live location.
+    if (!PS.map.available()) {
+      var nv0 = nearestVenue(DEMO_LOC.lat, DEMO_LOC.lng).v;
+      PS.map.create(el, spots().filter(function (l) { return l.venueId === nv0.id; })
+        .map(function (l) { return { id: l.id, lat: l.lat, lng: l.lng, label: U.money(l.price[type]), kind: 'spot' }; })
+        .concat([{ id: 'venue-' + nv0.id, lat: nv0.lat, lng: nv0.lng, label: shortName(nv0), kind: 'venue' }]),
+        { onClick: function (id) { R.go('#/spot/' + id); } });
+      locEl.textContent = 'Map offline · ' + nv0.city + ', ' + nv0.state;
+      locBtn.hidden = true;
+      return { setType: function () {}, destroy: function () {} };
+    }
+
+    var map = PS.map.base(el, { scrollWheelZoom: false });
+    var layer = window.L.layerGroup().addTo(map);
+    var markers = {}, me = null, meMarker = null, openId = null;
+
+    // Scroll-wheel zoom only after the map is clicked, so the page still scrolls past it.
+    el.addEventListener('click', function () { map.scrollWheelZoom.enable(); });
+    el.addEventListener('mouseleave', function () { map.scrollWheelZoom.disable(); });
+
+    function icon(html) { return window.L.divIcon({ className: 'pin-wrap', html: html, iconSize: null }); }
+    function draw() {
+      layer.clearLayers(); markers = {};
+      D.venues.forEach(function (v) {
+        window.L.marker([v.lat, v.lng], { icon: icon('<div class="pin-venue">' + I.icon('star', 'ic-fill') + '<span>' + esc(shortName(v)) + '</span></div>'), zIndexOffset: 1000, title: v.name })
+          .on('click', function () { R.go('#/search?' + U.buildQuery({ venue: v.id, type: type })); }).addTo(layer);
+      });
+      spots().forEach(function (l) {
+        markers[l.id] = window.L.marker([l.lat, l.lng], { icon: icon('<div class="pin-price">' + U.money(l.price[type]) + '</div>'), title: l.title })
+          .on('click', function () { openSheet(l); }).addTo(layer);
+      });
+      updateCount();
+    }
+
+    function setHl(id, on) { var m = markers[id], e = m && m.getElement(); if (e) e.classList.toggle('hl', on); if (m) m.setZIndexOffset(on ? 900 : 0); }
+    function openSheet(l) {
+      if (openId) setHl(openId, false);
+      openId = l.id; setHl(l.id, true);
+      var w = S.walk(l), v = S.venue(l.venueId);
+      sheet.innerHTML = '<a class="hm-spot" href="#/spot/' + l.id + '?' + U.buildQuery({ type: type }) + '">' +
+        '<span class="hm-thumb">' + I.photo(l, 0, { key: 'hm' }) + '</span>' +
+        '<span class="hm-info"><strong>' + esc(l.title) + '</strong><span class="muted">' + w.mins + ' min walk to ' + esc(shortName(v)) + '</span>' + CMP.rating(l) + '</span>' +
+        '<span class="hm-price"><b>' + U.money(l.price[type]) + '</b><span>' + L.unit[type] + '</span></span></a>' +
+        '<button type="button" class="hm-close" aria-label="Close">' + I.icon('x') + '</button>';
+      sheet.hidden = false;
+      U.$('.hm-close', sheet).addEventListener('click', closeSheet);
+    }
+    function closeSheet() { if (openId) setHl(openId, false); openId = null; sheet.hidden = true; }
+    map.on('click', closeSheet);
+
+    function fitVenue(v) {
+      var pts = spots().filter(function (l) { return l.venueId === v.id; }).map(function (l) { return [l.lat, l.lng]; }).concat([[v.lat, v.lng]]);
+      map.fitBounds(pts, { padding: [40, 40], maxZoom: 15 });
+    }
+    function updateCount() {
+      if (dead) return;
+      var b = map.getBounds(), c = map.getCenter();
+      var n = spots().filter(function (l) { return b.contains([l.lat, l.lng]); }).length;
+      var nv = nearestVenue(c.lat, c.lng).v;
+      countEl.innerHTML = n
+        ? '<b>' + n + '</b>&nbsp;spot' + (n === 1 ? '' : 's') + ' in view <a href="#/search?' + U.buildQuery({ venue: nv.id, type: type }) + '">List ' + I.icon('arrow') + '</a>'
+        : 'No spots here <button type="button" data-jump="' + nv.id + '">Go to ' + esc(shortName(nv)) + ' ' + I.icon('arrow') + '</button>';
+      var j = U.$('[data-jump]', countEl);
+      if (j) j.addEventListener('click', function () { fitVenue(S.venue(j.getAttribute('data-jump'))); });
+    }
+    map.on('moveend', updateCount);
+
+    function placeMe(pos) {
+      me = pos;
+      if (meMarker) meMarker.remove();
+      meMarker = window.L.marker([pos.lat, pos.lng], {
+        icon: window.L.divIcon({ className: 'me-wrap', html: '<div class="me-dot"><span></span></div>', iconSize: [22, 22] }),
+        zIndexOffset: 2000, interactive: false, keyboard: false
+      }).addTo(map);
+      var nv = nearestVenue(pos.lat, pos.lng), mi = nv.m / 1609.34;
+      if (nv.m <= NEAR_M) {
+        var pts = spots().filter(function (l) { return l.venueId === nv.v.id; }).map(function (l) { return [l.lat, l.lng]; })
+          .concat([[pos.lat, pos.lng], [nv.v.lat, nv.v.lng]]);
+        map.fitBounds(pts, { padding: [40, 40], maxZoom: 15 });
+      } else {
+        map.setView([pos.lat, pos.lng], 12);
+      }
+      locEl.textContent = pos.demo ? 'Demo location · ' + nv.v.city + ', ' + nv.v.state
+        : (mi < 3 ? 'Spots near ' + shortName(nv.v) : (mi < 10 ? mi.toFixed(1) : Math.round(mi)) + ' mi from ' + shortName(nv.v));
+    }
+
+    function locate(manual) {
+      if (!navigator.geolocation) { if (manual) UI.toast('Location isn’t available in this browser. Showing the demo location.'); return; }
+      locBtn.classList.add('busy');
+      navigator.geolocation.getCurrentPosition(function (p) {
+        if (dead) return;
+        locBtn.classList.remove('busy');
+        placeMe({ lat: p.coords.latitude, lng: p.coords.longitude });
+      }, function () {
+        if (dead) return;
+        locBtn.classList.remove('busy');
+        if (manual) UI.toast('Couldn’t get your location. Showing the demo location in Arlington, TX.');
+        placeMe(DEMO_LOC);
+      }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 });
+    }
+    locBtn.addEventListener('click', function () { if (me && !me.demo) placeMe(me); else locate(true); });
+
+    placeMe(DEMO_LOC);       // something useful right away (map needs a view before drawing)...
+    draw();
+    locEl.textContent = 'Finding you…';
+    locate(false);           // ...then switch to the real location if the browser allows it
+    setTimeout(function () { if (!dead) map.invalidateSize(); }, 60);
+
+    return {
+      setType: function (t) { type = t; closeSheet(); draw(); },
+      destroy: function () { dead = true; map.remove(); }
+    };
+  }
+
   /* ---------- HOME ---------- */
   R.add(/^\/$/, function () {
     var evs = S.upcomingEvents();
@@ -49,12 +181,6 @@
       var prices = ls.map(function (l) { return l.price.event || l.price.hourly; }).filter(Boolean);
       return { v: v, n: ls.length, from: prices.length ? Math.min.apply(0, prices) : null };
     });
-    function heroArt() {
-      var hl = S.listing('att-01'), he = S.event('ev-01');
-      if (!hl || !he) return '';
-      return '<div class="hero-art">' + CMP.card(hl, { eventId: he.id }) +
-        '<div class="hero-ticket">' + I.qr('PS-HERO1', 58) + '<div><b>' + esc(he.name) + '</b><span>' + U.fmtDate(he.date) + ' · Space #' + ((hl.photoSeed % 40) + 1) + '</span><span class="pill pill-ok">' + I.icon('check') + 'Checked in</span></div></div></div>';
-    }
     var feat = S.state.listings.filter(function (l) { return l.rating >= 4.9 && l.active; }).slice(0, 4);
 
     var html =
@@ -73,8 +199,16 @@
           '</div>' +
           '<div class="quick">' + ['AT&T Stadium', 'Lambeau Field', 'Wrigley Field', 'Ohio Stadium', 'Austin 6th St'].map(function (q) { return '<button type="button" class="chip chip-dark" data-q="' + esc(q) + '">' + esc(q) + '</button>'; }).join('') + '</div>' +
         '</form>' +
+        '<div class="home-map-card">' +
+          '<div class="hm-head"><h2>You are here</h2><span class="hm-loc" id="hm-loc">Finding you…</span></div>' +
+          '<div class="hm-wrap"><div id="home-map" class="map home-map" role="region" aria-label="Map of parking spots near you"></div>' +
+            '<div class="hm-count" id="hm-count" aria-live="polite"></div>' +
+            '<div class="hm-sheet" id="hm-sheet" hidden></div>' +
+            '<button type="button" class="hm-locate" id="hm-locate" aria-label="Center on my location" title="Center on my location">' + I.icon('locate') + '</button>' +
+          '</div>' +
+        '</div>' +
         '<div class="hero-stats"><div><b>' + S.state.listings.length + '</b><span>spots listed</span></div><div><b>' + D.venues.length + '</b><span>venues</span></div><div><b>4.8' + I.icon('star', 'ic-fill') + '</b><span>avg host rating</span></div></div>' +
-      '</div>' + heroArt() + '</div></section>' +
+      '</div></div></section>' +
 
       '<section class="wrap section"><div class="section-head"><div><p class="eyebrow">Next up</p><h2>Upcoming events</h2></div><a class="link" href="#/search?type=event">All spots ' + I.icon('arrow') + '</a></div>' +
         '<div class="ev-strip" tabindex="0">' + evs.map(CMP.eventChip).join('') + '</div></section>' +
@@ -109,10 +243,13 @@
       mount: function (root) {
         var form = U.$('#hero-search', root), input = U.$('#hero-q', root), sug = U.$('#hero-suggest', root);
         var type = 'event';
+        var hm = homeMap(root, type);
+        R.onLeave(function () { hm.destroy(); });
         U.$$('#hero-type button', root).forEach(function (b) {
           b.addEventListener('click', function () {
             U.$$('#hero-type button', root).forEach(function (x) { x.classList.remove('on'); });
             b.classList.add('on'); type = b.getAttribute('data-type');
+            hm.setType(type);
           });
         });
         function go(q) { R.go('#/search?' + U.buildQuery({ q: q, type: type })); }

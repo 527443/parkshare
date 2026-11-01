@@ -198,15 +198,20 @@
   /* ---------- map helper (Leaflet with offline fallback) ---------- */
   PS.map = {
     available: function () { return typeof window.L !== 'undefined' && window.L.map; },
+    // Bare Leaflet map with the shared OSM tile layer
+    base: function (el, lopts) {
+      var map = window.L.map(el, Object.assign({ zoomControl: true, attributionControl: true }, lopts || {}));
+      window.L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors'
+      }).addTo(map);
+      return map;
+    },
     // items: [{id, lat, lng, label, kind:'spot'|'venue'|'new'}]
     create: function (el, items, opts) {
       opts = opts || {};
       var markers = {};
       if (PS.map.available()) {
-        var map = window.L.map(el, { scrollWheelZoom: !!opts.scroll, zoomControl: true, attributionControl: true });
-        window.L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-          maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors'
-        }).addTo(map);
+        var map = PS.map.base(el, { scrollWheelZoom: !!opts.scroll });
         var bounds = [];
         items.forEach(function (it) {
           var html = it.kind === 'venue' ? '<div class="pin-venue">' + I.icon('star', 'ic-fill') + '<span>' + esc(it.label) + '</span></div>'

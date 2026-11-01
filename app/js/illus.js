@@ -203,6 +203,7 @@
     lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11 V7 A4 4 0 0 1 16 7 V11"/>',
     camera: '<path d="M3 8 H7 L9 5 H15 L17 8 H21 V19 H3Z"/><circle cx="12" cy="13" r="3.5"/>',
     plus: '<path d="M12 5 V19 M5 12 H19"/>',
+    locate: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.6"/><path d="M12 2 V5 M12 19 V22 M2 12 H5 M19 12 H22"/>',
     map: '<path d="M3 6 L9 4 L15 6 L21 4 V18 L15 20 L9 18 L3 20Z M9 4 V18 M15 6 V20"/>',
     list: '<path d="M8 6 H21 M8 12 H21 M8 18 H21"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>',
     reset: '<path d="M4 12 A8 8 0 1 0 7 5.8 M4 4 V9 H9"/>',
